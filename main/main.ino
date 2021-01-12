@@ -1,22 +1,51 @@
 #include <Wire.h>
 #include <Kalman.h>
 
+#define CHA_L 2
+#define CHB_L 4
+#define CHA_R 7
+#define CHB_R 8
+#define wheelRadius 0.0335
+#define CPR 853
+#define PI_val 3.14159 
+
+volatile int count_L = 0;
+volatile double wheelDistance_L;
+volatile int count_R = 0;
+volatile double wheelDistance_R;
+volatile double distance;
+
 const int MPU_addr=0x68;  // I2C address of the MPU-6050
 
 Kalman kalmanX; // Create the Kalman instances
 Kalman kalmanY;
 
 /* IMU Data */
-int16_t accX, accY, accZ;
-int16_t gyroX, gyroY, gyroZ;
-int16_t tempRaw;
+volatile int16_t accX, accY, accZ;
+volatile int16_t gyroX, gyroY, gyroZ;
+volatile int16_t tempRaw;
 
-double gyroXangle, gyroYangle; // Angle calculate using the gyro only
-double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
+volatile double roll, pitch;
 
-uint32_t timer;
+volatile double gyroXrate, gyroYrate;
+
+volatile double gyroXangle, gyroYangle; // Angle calculate using the gyro only
+volatile double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
+
+volatile uint32_t timer;
+volatile double dt;
 
 void setup(){
+  // Encoder setup.
+  pinMode(CHA_L, INPUT);
+  pinMode(CHB_L, INPUT);
+  pinMode(CHA_R, INPUT);
+  pinMode(CHB_R, INPUT);
+
+  attachInterrupt(0, interruptionFunction_L, RISING);
+  attachInterrupt(0, interruptionFunction_R, RISING);
+
+  // MPU6050 setup.
   Wire.begin();
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x6B);  // PWR_MGMT_1 register
@@ -39,8 +68,8 @@ void setup(){
   gyroY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
   gyroZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)  
 
-  double roll  = atan2(accY, accZ) * RAD_TO_DEG;
-  double pitch = atan2(-accX, accZ) * RAD_TO_DEG;
+  roll  = atan2(accY, accZ) * RAD_TO_DEG;
+  pitch = atan2(-accX, accZ) * RAD_TO_DEG;
 
   kalmanX.setAngle(roll); // Set starting angle
   kalmanY.setAngle(pitch);
@@ -52,6 +81,10 @@ void setup(){
 }
 
 void loop(){
+  wheelDistance_L = count_L * 2 * PI_val * wheelRadius / CPR;
+  wheelDistance_R = count_R * 2 * PI_val * wheelRadius / CPR;
+  distance = (wheelDistance_L + wheelDistance_R)/2;
+  
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
   Wire.endTransmission(false);
@@ -65,14 +98,14 @@ void loop(){
   gyroY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
   gyroZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
 
-  double dt = (double)(micros() - timer) / 1000000; // Calculate delta time
+  dt = (double)(micros() - timer) / 1000000; // Calculate delta time
   timer = micros();
 
-  double roll  = atan2(accY, accZ) * RAD_TO_DEG;
-  double pitch = atan2(-accX, accZ) * RAD_TO_DEG;
+  roll  = atan2(accY, accZ) * RAD_TO_DEG;
+  pitch = atan2(-accX, accZ) * RAD_TO_DEG;
   
-  double gyroXrate = gyroX / 131.0; // Convert to deg/s
-  double gyroYrate = gyroY / 131.0; // Convert to deg/s
+  gyroXrate = gyroX / 131.0; // Convert to deg/s
+  gyroYrate = gyroY / 131.0; // Convert to deg/s
 
   // This fixes the transition problem when the accelerometer angle jumps between -180 and 180 degrees
   if ((roll < -90 && kalAngleX > 90) || (roll > 90 && kalAngleX < -90)) {
@@ -107,6 +140,31 @@ void loop(){
   Serial.print(kalAngleY);
   Serial.print("\t");
   Serial.print("Kalman roll: ");
-  Serial.println(kalAngleX);
+  Serial.print(kalAngleX);
+  Serial.print("\t");
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.print("\t");
+  Serial.print("Sample time: ");
+  Serial.print(dt);
+  Serial.println(" s");
 
+}
+
+void interruptionFunction_L() {
+  if (digitalRead(CHA_L) && !digitalRead(CHB_L)) {
+    count_L++ ;
+  }
+  if (digitalRead(CHA_L) && digitalRead(CHB_L)) {
+    count_L-- ;
+  } 
+}
+
+void interruptionFunction_R() {
+  if (digitalRead(CHA_R) && !digitalRead(CHB_R)) {
+    count_R++ ;
+  }
+  if (digitalRead(CHA_R) && digitalRead(CHB_R)) {
+    count_R-- ;
+  } 
 }
